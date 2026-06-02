@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>vouch — AI writes the code, reviewers sign the hashes</title>
+  <meta name="description" content="A content-addressed lambda service with signed reviews. Auto-dedupes new code into reviewed primitives; blocks flagged patterns at deploy time.">
+  <style>
+    :root {
+      --bg:        #0d0d10;
+      --bg-elev:   #18181b;
+      --bg-deep:   #08080a;
+      --border:    #27272a;
+      --text:      #e4e4e7;
+      --muted:     #71717a;
+      --green:     #4ade80;
+      --green-bg:  rgba(74, 222, 128, 0.10);
+      --amber:     #fbbf24;
+      --red:       #f87171;
+      --red-bg:    rgba(248, 113, 113, 0.10);
+      --blue:      #60a5fa;
+      --blue-bg:   rgba(96, 165, 250, 0.10);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html { -webkit-text-size-adjust: 100%; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      line-height: 1.6;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    .mono {
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, Monaco, Consolas, monospace;
+    }
+
+    .container {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 32px 24px 96px;
+    }
+
+    /* ---- header ---- */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 80px;
+      font-size: 13px;
+    }
+    .logo {
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .logo .prefix { color: var(--green); }
+    .badge {
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      font-size: 11px;
+      letter-spacing: 0.02em;
+    }
+
+    /* ---- hero ---- */
+    h1 {
+      font-size: clamp(32px, 5.5vw, 46px);
+      line-height: 1.1;
+      letter-spacing: -0.025em;
+      margin: 0 0 20px;
+      font-weight: 600;
+    }
+    h1 .accent { color: var(--green); }
+    .lead {
+      font-size: 17px;
+      color: var(--muted);
+      line-height: 1.6;
+      margin: 0 0 8px;
+      max-width: 620px;
+    }
+
+    /* ---- sections ---- */
+    section { margin-top: 72px; }
+    h2 {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--muted);
+      font-weight: 500;
+      margin: 0 0 16px;
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    }
+    h2::before { content: '# '; color: var(--green); }
+    h2 .num {
+      color: var(--green);
+      font-weight: 600;
+      margin-right: 4px;
+    }
+    h3 {
+      font-size: 15px;
+      margin: 0 0 8px;
+      font-weight: 600;
+      letter-spacing: -0.005em;
+    }
+    p { margin: 0 0 16px; }
+    p.caption {
+      font-size: 13px;
+      color: var(--muted);
+      font-style: italic;
+      margin-top: 16px;
+    }
+
+    /* ---- pipeline (AST stages) ---- */
+    .pipeline {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      margin-top: 24px;
+    }
+    .stage {
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 18px;
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      font-size: 12.5px;
+      line-height: 1.65;
+    }
+    .stage pre {
+      margin: 0;
+      white-space: pre;
+      overflow-x: auto;
+      color: var(--text);
+    }
+    .stage-label {
+      font-size: 10px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 10px;
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    }
+    .stage.hash {
+      border-color: var(--green);
+      background: var(--green-bg);
+    }
+    .stage.hash pre { color: var(--green); }
+    .stage .keyword { color: var(--blue); }
+    .stage .name { color: var(--amber); }
+    .stage .type { color: var(--muted); font-style: italic; }
+    .stage .lit { color: var(--green); }
+    .stage .stripped { color: var(--muted); }
+    .stage .ref { color: var(--blue); }
+    .pipe-arrow {
+      align-self: center;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      padding: 10px 0;
+    }
+    .pipe-arrow .arrow {
+      display: inline-block;
+      margin-right: 8px;
+      color: var(--green);
+      font-size: 14px;
+      transform: translateY(1px);
+    }
+
+    /* ---- review card ---- */
+    .review-card {
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-top: 16px;
+      overflow: hidden;
+    }
+    .review-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 18px;
+      background: var(--bg-deep);
+      border-bottom: 1px solid var(--border);
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      font-size: 12.5px;
+    }
+    .review-target { color: var(--text); }
+    .review-target .dim { color: var(--muted); margin-left: 8px; }
+    .review-verdict {
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: var(--green-bg);
+      border: 1px solid var(--green);
+      color: var(--green);
+    }
+    .review-body { padding: 12px 18px; }
+    .review-row {
+      display: grid;
+      grid-template-columns: 90px 1fr;
+      gap: 16px;
+      padding: 6px 0;
+      font-size: 13.5px;
+      line-height: 1.5;
+    }
+    .review-row .key {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding-top: 1px;
+    }
+    .review-row .val { color: var(--text); }
+    .review-row .val .tier-S { margin-left: 6px; font-size: 11px; }
+
+    /* ---- dedupe visualization ---- */
+    .dedupe {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+      margin-top: 24px;
+    }
+    .dedupe-block {
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 18px;
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      font-size: 12.5px;
+      line-height: 1.7;
+    }
+    .dedupe-block pre {
+      margin: 0;
+      white-space: pre;
+      overflow-x: auto;
+      color: var(--text);
+    }
+    .hl {
+      display: inline-block;
+      width: 100%;
+      padding: 0 6px;
+      margin: 0 -6px;
+      border-radius: 3px;
+      border-left: 3px solid;
+    }
+    .hl-1 { background: var(--blue-bg);  border-color: var(--blue); }
+    .hl-2 { background: var(--green-bg); border-color: var(--green); }
+    .hl-3 { background: var(--red-bg);   border-color: var(--red); }
+    .extraction-list {
+      margin-top: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .ext-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 12px;
+      align-items: center;
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      font-size: 12.5px;
+      padding: 10px 14px;
+      background: var(--bg-deep);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .ext-row .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+    .ext-row .dot-1 { background: var(--blue); }
+    .ext-row .dot-2 { background: var(--green); }
+    .ext-row .dot-3 { background: var(--red); }
+    .ext-row .dot-4 { background: var(--amber); }
+    .ext-row .desc { color: var(--text); }
+    .ext-row .desc .dim { color: var(--muted); margin-left: 6px; }
+    .ext-row .tag {
+      padding: 2px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      font-weight: 600;
+    }
+    .ext-row .tag.ok    { background: var(--green-bg); color: var(--green); }
+    .ext-row .tag.bad   { background: var(--red-bg);   color: var(--red); }
+
+    /* ---- terminal (used in step 4) ---- */
+    .terminal {
+      background: var(--bg-deep);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px 22px;
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      font-size: 12.5px;
+      line-height: 1.85;
+      overflow-x: auto;
+      white-space: pre;
+    }
+    .terminal .ok    { color: var(--green); }
+    .terminal .warn  { color: var(--amber); }
+    .terminal .err   { color: var(--red); }
+    .terminal .dim   { color: var(--muted); }
+    .terminal .acc   { color: var(--blue); }
+    .terminal .text  { color: var(--text); }
+
+    /* ---- tier S badge (used in section 02 review card) ---- */
+    .tier-S { color: var(--green); }
+
+    /* ---- ascii flow diagram (used in the overview) ---- */
+    .diagram {
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px 28px;
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      font-size: 12.5px;
+      color: var(--text);
+      line-height: 1.55;
+      white-space: pre;
+      overflow-x: auto;
+    }
+    .diagram .arrow { color: var(--green); }
+    .diagram .dim   { color: var(--muted); }
+    .diagram .box   { color: var(--text); }
+
+    /* ---- footer ---- */
+    footer {
+      margin-top: 96px;
+      padding-top: 28px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12.5px;
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    a {
+      color: var(--text);
+      text-decoration: none;
+      border-bottom: 1px solid var(--border);
+      transition: border-color 0.15s ease;
+    }
+    a:hover { border-color: var(--green); }
+
+    code {
+      background: var(--bg-elev);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      font-size: 0.88em;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    @media (max-width: 640px) {
+      footer { flex-direction: column; }
+      .stage, .dedupe-block, .terminal, .flywheel { font-size: 11.5px; }
+      .review-row { grid-template-columns: 1fr; gap: 4px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <header>
+      <div class="logo"><span class="prefix">0x</span>vouch</div>
+      <div class="badge">v0 · prototype · 2026</div>
+    </header>
+
+    <h1>
+      AI writes the code.<br>
+      <span class="accent">Reviewers sign the hashes.</span>
+    </h1>
+    <p class="lead">
+      A content-addressed lambda service: every function has a unique hash, named developers sign reviews against those hashes, storage is scoped per-space so one reviewed function serves any number of users with their data isolated, and the deploy pipeline rewrites your code into the canonical reviewed primitives &mdash; refusing anything that matches a dangerous pattern.
+    </p>
+
+    <section>
+      <h2>the problem</h2>
+      <p>
+        LLM-generated code is fast but unaudited. Every prompt regenerates the same logic from scratch &mdash; same auth flow, same email validator, same off-by-one bug &mdash; with no shared notion of what's safe. Trust is by vibes. We can do better.
+      </p>
+    </section>
+
+    <!-- ============================================================
+         how it fits together · overview
+         ============================================================ -->
+    <section>
+      <h2>how it fits together</h2>
+      <p>
+        A hosted service. You write TypeScript (or Claude does, via a skill); the compile pipeline normalizes the AST, rewrites your code against a registry of signed primitives, and refuses anything matching a flagged pattern; the result runs in an isolated sandbox bound to <em>your</em> space's private storage &mdash; so the same reviewed function can serve any number of users without their data ever touching each other.
+      </p>
+
+      <div class="diagram">
+              <span class="dim">┌──────────────────────────────┐</span>
+              <span class="dim">│</span>    <span class="box">you  /  Claude</span>            <span class="dim">│</span>
+              <span class="dim">│</span>    <span class="dim">+ vouch skill</span>             <span class="dim">│</span>
+              <span class="dim">└──────────────┬───────────────┘</span>
+                             <span class="dim">│</span>   <span class="dim">source</span>
+                             <span class="arrow">↓</span>
+              <span class="dim">┌──────────────────────────────┐</span>
+              <span class="dim">│</span>    <span class="box">compile pipeline</span>          <span class="dim">│</span>
+              <span class="dim">│</span>    <span class="dim">parse · normalize</span>         <span class="dim">│</span>
+              <span class="dim">│</span>    <span class="dim">hash · dedupe · scan</span>      <span class="dim">│</span>
+              <span class="dim">└──────────────┬───────────────┘</span>
+                             <span class="dim">│</span>   <span class="dim">bundle</span>
+                             <span class="arrow">↓</span>
+              <span class="dim">┌──────────────────────────────┐</span>
+              <span class="dim">│</span>    <span class="box">sandbox runtime</span>           <span class="dim">│</span>
+              <span class="dim">│</span>    <span class="dim">isolated · per-space</span>      <span class="dim">│</span>
+              <span class="dim">│</span>    <span class="dim">capability-bound storage</span>  <span class="dim">│</span>
+              <span class="dim">└──────────────┬───────────────┘</span>
+                             <span class="arrow">↓</span>
+                       <span class="box">your live app</span>
+      </div>
+
+      <p class="caption">
+        The four sections below explain the core mechanic (steps 01&ndash;04). The two after show how it ships (steps 05&ndash;06).
+      </p>
+    </section>
+
+    <!-- ============================================================
+         STEP 1 · function = hash
+         ============================================================ -->
+    <section>
+      <h2><span class="num">01</span> function = hash</h2>
+      <p>
+        Every function's identity is the hash of its <em>normalized</em> AST. Naming, formatting, and type annotations are stripped before hashing &mdash; so a rename produces the same hash, but a behavior change produces a new one.
+      </p>
+
+      <div class="pipeline">
+
+        <div class="stage">
+          <div class="stage-label">①  source · TypeScript</div>
+<pre><span class="keyword">function</span> <span class="name">isEven</span>(<span class="name">n</span>: <span class="type">number</span>): <span class="type">boolean</span> {
+  <span class="keyword">const</span> <span class="name">result</span> = <span class="name">n</span> % <span class="lit">2</span> === <span class="lit">0</span>;
+  <span class="keyword">return</span> <span class="name">result</span>;
+}</pre>
+        </div>
+
+        <div class="pipe-arrow"><span class="arrow">↓</span>parse</div>
+
+        <div class="stage">
+          <div class="stage-label">②  ast · with names &amp; types</div>
+<pre>FunctionDeclaration <span class="name">"isEven"</span>
+├── Param <span class="name">"n"</span>: <span class="type">number</span>
+├── ReturnType: <span class="type">boolean</span>
+└── Body
+    ├── VarDecl <span class="name">"result"</span> =
+    │   └── BinaryExpr "==="
+    │       ├── BinaryExpr "%"
+    │       │   ├── Identifier <span class="name">"n"</span>
+    │       │   └── Literal <span class="lit">2</span>
+    │       └── Literal <span class="lit">0</span>
+    └── Return Identifier <span class="name">"result"</span></pre>
+        </div>
+
+        <div class="pipe-arrow"><span class="arrow">↓</span>strip names · strip types · index locals</div>
+
+        <div class="stage">
+          <div class="stage-label">③  ast · normalized (de bruijn-style)</div>
+<pre>FunctionDeclaration
+├── Param <span class="stripped">·</span>
+├── ReturnType <span class="stripped">·</span>
+└── Body
+    ├── VarDecl <span class="stripped">·</span> =
+    │   └── BinaryExpr "==="
+    │       ├── BinaryExpr "%"
+    │       │   ├── <span class="ref">$0</span>            <span class="stripped">// first param</span>
+    │       │   └── Literal <span class="lit">2</span>
+    │       └── Literal <span class="lit">0</span>
+    └── Return <span class="ref">$1</span>                  <span class="stripped">// first local</span></pre>
+        </div>
+
+        <div class="pipe-arrow"><span class="arrow">↓</span>sha256</div>
+
+        <div class="stage hash">
+          <div class="stage-label">④  hash</div>
+<pre>fn:7f3b9c2e1a5d8f4e6b2c0a91d4e7f8c1b...</pre>
+        </div>
+
+      </div>
+
+      <p class="caption">
+        Rename <code>n</code> to <code>x</code>? Same hash. Strip the type annotation? Same hash. Change <code>=== 0</code> to <code>!== 0</code>? Different hash. Behavior is the version.
+      </p>
+    </section>
+
+    <!-- ============================================================
+         STEP 2 · reviewers sign hashes
+         ============================================================ -->
+    <section>
+      <h2><span class="num">02</span> reviewers sign hashes</h2>
+      <p>
+        Named developers attach cryptographically signed reviews to specific hashes. Reputation tiers are computed from peer endorsements, audit volume, and retraction rate &mdash; think OpenZeppelin for Solidity.
+      </p>
+
+      <div class="review-card">
+        <div class="review-header">
+          <span class="review-target"><span class="mono">fn:abc1…d3f0</span><span class="dim">auth.hashPassword</span></span>
+          <span class="review-verdict">✓ FINAL</span>
+        </div>
+        <div class="review-body">
+          <div class="review-row">
+            <span class="key mono">reviewer</span>
+            <span class="val">@rachel-secops <span class="tier-S mono">TIER&nbsp;S</span></span>
+          </div>
+          <div class="review-row">
+            <span class="key mono">signed</span>
+            <span class="val mono">2026-04-12 · sig ec1a8f…7b2d</span>
+          </div>
+          <div class="review-row">
+            <span class="key mono">audited</span>
+            <span class="val">scrypt N=16384 r=8 p=1, constant-time compare, salt 16B, no leaks. Safe for password storage.</span>
+          </div>
+          <div class="review-row">
+            <span class="key mono">also signed</span>
+            <span class="val">@oz-eth · @samczsun · @trailofbits-bot</span>
+          </div>
+        </div>
+      </div>
+
+      <p class="caption">
+        Five signatures from TIER S reviewers = the hash itself becomes TIER S. The signature lives next to the code, not in some external SOC2 PDF.
+      </p>
+    </section>
+
+    <!-- ============================================================
+         STEP 3 · deploys auto-dedupe
+         ============================================================ -->
+    <section>
+      <h2><span class="num">03</span> the compiler auto-dedupes</h2>
+      <p>
+        At compile time, every sub-tree in your code is hashed. Matches against the registry are <em>automatically rewritten as imports</em> &mdash; you get the canonical reviewed version for free, even if your LLM just regenerated it from scratch.
+      </p>
+
+      <div class="dedupe">
+        <div class="dedupe-block">
+          <div class="stage-label">your code · source</div>
+<pre><span class="keyword">async function</span> register(email, pw) {
+<span class="hl hl-1">  if (!/^\S+@\S+\.\S+$/.test(email))
+    throw new Error("invalid email");</span>
+
+<span class="hl hl-2">  const salt = randomBytes(16);
+  const k = scryptSync(pw, salt, 64);
+  const stored = `scrypt$16384$8$1$${salt}$${k}`;</span>
+
+  return db.users.insert({ email, stored });
+}</pre>
+        </div>
+
+        <div class="extraction-list">
+          <div class="ext-row">
+            <div class="dot dot-1"></div>
+            <div class="desc"><span class="mono">fn:def4…1c80</span><span class="dim">validators.email</span></div>
+            <div class="tag ok">↳ EXTRACTED  TIER S</div>
+          </div>
+          <div class="ext-row">
+            <div class="dot dot-2"></div>
+            <div class="desc"><span class="mono">fn:abc1…d3f0</span><span class="dim">auth.hashPassword</span></div>
+            <div class="tag ok">↳ EXTRACTED  TIER S</div>
+          </div>
+        </div>
+
+        <div class="dedupe-block">
+          <div class="stage-label">your code · compiled (1 new line, the rest is reviewed)</div>
+<pre><span class="keyword">import</span> { validateEmail } <span class="keyword">from</span> "fn:def4…1c80";
+<span class="keyword">import</span> { hashPassword }  <span class="keyword">from</span> "fn:abc1…d3f0";
+
+<span class="keyword">async function</span> register(email, pw) {
+  if (!validateEmail(email))
+    throw new Error("invalid email");
+
+  const stored = await hashPassword(pw);
+
+  return db.users.insert({ email, stored });
+}</pre>
+        </div>
+      </div>
+
+      <p class="caption">
+        Your 9-line function became 6 lines + 2 imports. The 2 imports pull in TIER S code that's already been audited by named reviewers. Net new unreviewed code: 1 line (the db call). That's all that needs reviewing.
+      </p>
+    </section>
+
+    <!-- ============================================================
+         STEP 4 · dangerous patterns blocked
+         ============================================================ -->
+    <section>
+      <h2><span class="num">04</span> dangerous patterns are blocked</h2>
+      <p>
+        Reviewers can also sign <em>negative</em> reviews: "this exact AST is dangerous." Any source whose AST contains a sub-tree matching a flagged hash fails to compile &mdash; loudly, with the reviewers and the reason.
+      </p>
+
+      <div class="dedupe">
+        <div class="dedupe-block">
+          <div class="stage-label">your code · with a hidden problem</div>
+<pre><span class="keyword">async function</span> register(email, pw) {
+  if (!validateEmail(email))
+    throw new Error("invalid email");
+
+  const stored = await hashPassword(pw);
+
+<span class="hl hl-3">  console.log("registering", email, pw);</span>
+
+  return db.users.insert({ email, stored });
+}</pre>
+        </div>
+
+        <div class="extraction-list">
+          <div class="ext-row">
+            <div class="dot dot-3"></div>
+            <div class="desc"><span class="mono">fn:bad001…ee04</span><span class="dim">logger.password-leak</span></div>
+            <div class="tag bad">✗ FLAGGED  3 × TIER S</div>
+          </div>
+        </div>
+
+        <div class="terminal">
+<span class="dim">scanning sub-trees . . .  47 nodes</span>
+
+<span class="err">✗  match</span>   <span class="text">line 7</span>  <span class="dim">console.log("registering", email, pw)</span>
+            <span class="dim">→ matches</span> <span class="text">fn:bad001…ee04  logger.password-leak</span>
+            <span class="dim">→ flagged by</span> <span class="acc">@rachel-secops · @oz-eth · @samczsun</span>  <span class="ok">all TIER S</span>
+            <span class="dim">→ reason</span> <span class="text">"logs plaintext password to a destination outside the call boundary"</span>
+
+<span class="err">compile aborted.</span>  <span class="dim">1 dangerous pattern. fix and retry.</span>
+        </div>
+      </div>
+
+      <p class="caption">
+        The reviewer didn't need to anticipate <em>your</em> code &mdash; they just needed to sign the dangerous pattern once. Every future deploy containing that exact AST shape, anywhere on the platform, is caught.
+      </p>
+    </section>
+
+    <!-- ============================================================
+         STEP 5 · hosted as a service
+         ============================================================ -->
+    <section>
+      <h2><span class="num">05</span> hosted as a service</h2>
+      <p>
+        All of the above happens in <em>our</em> cloud. The function registry lives in a content-addressed object store; user code runs in isolated sandboxes; Claude Code talks to the service through a <em>skill</em>. <code>deploy</code> is the verb you type &mdash; under the hood it triggers the compile pipeline from steps 01&ndash;04: parse, normalize, hash, dedupe, scan, bundle, run.
+      </p>
+
+      <div class="terminal">
+<span class="dim">$</span> <span class="text">claude</span>
+<span class="dim">  [skill loaded: vouch]</span>
+
+<span class="acc">&gt; build a small reddit-style forum for my book club</span>
+
+<span class="dim">  vouch: searching registry . . . . . 12 candidate primitives</span>
+<span class="dim">  vouch: composing  . . . . . . . . . 4 new functions · 247 LoC</span>
+<span class="dim">  vouch: compiling  . . . . . . . . . 89 LoC after dedupe</span>
+<span class="ok">                                       ✓ 8 extracted   ✓ 0 flagged</span>
+<span class="dim">  vouch: deploying  . . . . . . . . . sandbox provisioned · storage bound</span>
+<span class="dim">  vouch: live →</span> <span class="text">https://bookclub.vouch.dev</span>
+
+<span class="ok">✓ done.</span>  <span class="dim">total: 11s.</span>
+      </div>
+
+      <p class="caption">
+        Same binary is open source. The cloud is the front door; self-host is the escape hatch for when sovereignty matters.
+      </p>
+    </section>
+
+    <!-- ============================================================
+         STEP 6 · storage is a parameter
+         ============================================================ -->
+    <section>
+      <h2><span class="num">06</span> storage is a parameter</h2>
+      <p>
+        A reviewed function never owns data &mdash; storage is passed in. This means the <em>same hash</em>, the same audited code, can run for a thousand users with their data fully isolated. Content addressing pays off twice: <em>code is shared, storage is not</em>.
+      </p>
+
+      <div class="stage">
+        <div class="stage-label">one function · signed once · runs anywhere</div>
+<pre><span class="keyword">import</span> { createUser } <span class="keyword">from</span> "fn:abc1…d3f0";   <span class="stripped">// TIER S · 5 signatures</span>
+
+<span class="keyword">function</span> <span class="name">createUser</span>(<span class="name">storage</span>, <span class="name">email</span>, <span class="name">hash</span>) {
+  <span class="name">storage</span>.users.insert({ <span class="name">email</span>, <span class="name">passwordHash</span>: <span class="name">hash</span> });
+}</pre>
+      </div>
+
+      <div class="extraction-list" style="margin-top: 16px;">
+        <div class="ext-row">
+          <div class="dot dot-1"></div>
+          <div class="desc"><span class="text">@alice/book-club</span><span class="dim">storage → alice's private store</span></div>
+          <div class="tag ok">isolated</div>
+        </div>
+        <div class="ext-row">
+          <div class="dot dot-2"></div>
+          <div class="desc"><span class="text">@bob/recipes</span><span class="dim">storage → bob's private store</span></div>
+          <div class="tag ok">isolated</div>
+        </div>
+        <div class="ext-row">
+          <div class="dot dot-4"></div>
+          <div class="desc"><span class="text">@carol/team-portal</span><span class="dim">storage → carol's private store</span></div>
+          <div class="tag ok">isolated</div>
+        </div>
+      </div>
+
+      <p class="caption">
+        Capability-scoped &mdash; each function declares which tables it needs, and the sandbox binds only those, only for that space. The function literally cannot see other tenants' data.
+      </p>
+    </section>
+
+    <footer>
+      <div>0xvouch · 2026</div>
+      <div><a href="#">github</a> &nbsp;·&nbsp; <a href="#">docs</a> &nbsp;·&nbsp; <a href="#">contact</a></div>
+    </footer>
+
+  </div>
+</body>
+</html>
